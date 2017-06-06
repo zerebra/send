@@ -30,24 +30,25 @@ let download = () => {
     }
   });
 
-  fileReceiver.download()
-  .catch((err) => {
-    console.log('The file has expired, or has already been deleted.');
-    document.getElementById('downloaded_files').removeChild(li);
-    return;
-  })
-  .then(([decrypted, fname]) => {
-    name.innerText = fname;
-    let dataView = new DataView(decrypted);
-    let blob = new Blob([dataView]);
-    let downloadUrl = URL.createObjectURL(blob);
+  fileReceiver
+    .download()
+    .catch(err => {
+      console.log('The file has expired, or has already been deleted.');
+      document.getElementById('downloaded_files').removeChild(li);
+      return;
+    })
+    .then(([decrypted, fname]) => {
+      name.innerText = fname;
+      let dataView = new DataView(decrypted);
+      let blob = new Blob([dataView]);
+      let downloadUrl = URL.createObjectURL(blob);
 
-    let a = document.createElement('a');
-    a.href = downloadUrl;
-    a.download = fname;
-    document.body.appendChild(a);
-    a.click();
-  });
+      let a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+    });
 };
 
 window.download = download;
