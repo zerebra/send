@@ -10,7 +10,7 @@ const stream = require('stream');
 let aws_credentials = conf.get('aws_credentials');
 
 const AWS = require('aws-sdk');
-AWS.config.loadFromPath('../../.aws/credentials');
+// AWS.config.loadFromPath('../../.aws/credentials');
 const s3 = new AWS.S3();
 
 
