@@ -1,0 +1,241 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Single machine Test Pilot P2P environment",
+
+  "Parameters" : {
+    "KeyName": {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the web server",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern" : "[\\x20-\\x7E]*",
+      "ConstraintDescription" : "can contain only ASCII characters."
+    },
+    "HostedZone" : {
+      "Type": "String",
+      "Description" : "The DNS name of an existing Amazon Route 53 hosted zone"
+    },
+    "Subdomain" : {
+      "Type": "String",
+      "Description" : "subdomain"
+    },
+    "SSLCertificateArn": {
+      "Type": "String"
+    },
+    "EC2InstanceType": {
+      "Description": "EC2 instance type",
+      "Type": "String",
+      "Default": "t2.medium",
+      "AllowedValues": [
+        "t2.micro",
+        "t2.small",
+        "t2.medium",
+        "t2.large",
+        "m3.medium",
+        "m3.large",
+        "m3.xlarge"
+      ],
+      "ConstraintDescription": "must be a valid EC2 instance type."
+    },
+    "EC2VolumeSize": {
+      "Description": "EC2 volume size (GB)",
+      "Type": "String",
+      "Default": "8",
+      "AllowedValues": [
+        "8",
+        "16",
+        "24",
+        "32",
+        "40"
+      ]
+    }
+  },
+
+  "Mappings" : {
+    "RegionMap" : {
+      "us-east-1"      : { "AMI" : "ami-0b33d91d" },
+      "us-west-1"      : { "AMI" : "ami-165a0876" },
+      "us-west-2"      : { "AMI" : "ami-f173cc91" },
+      "eu-west-1"      : { "AMI" : "ami-70edb016" },
+      "eu-central-1"   : { "AMI" : "ami-af0fc0c0" },
+      "ap-southeast-1" : { "AMI" : "ami-dc9339bf" },
+      "ap-northeast-1" : { "AMI" : "ami-56d4ad31" },
+      "ap-southeast-2" : { "AMI" : "ami-dac312b4" },
+      "sa-east-1"      : { "AMI" : "ami-80086dec" }
+    }
+  },
+
+  "Resources" : {
+
+    "TestPilotP2PSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Test Pilot P2P",
+        "SecurityGroupIngress" : [
+          {
+            "IpProtocol" : "tcp",
+            "FromPort" : "22", "ToPort" : "22",
+            "CidrIp" : "0.0.0.0/0"
+          },
+          {
+            "IpProtocol" : "tcp",
+            "FromPort" : "1443", "ToPort" : "1443",
+            "CidrIp" : "0.0.0.0/0"
+          },
+          {
+            "IpProtocol" : "tcp",
+            "FromPort" : "80", "ToPort" : "80",
+            "CidrIp" : "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+
+    "TestPilotP2PELBSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Test Pilot P2P ELB",
+        "SecurityGroupIngress" : [
+          {
+            "IpProtocol" : "tcp",
+            "FromPort" : "443", "ToPort" : "443",
+            "CidrIp" : "0.0.0.0/0"
+          },
+          {
+            "IpProtocol" : "tcp",
+            "FromPort" : "80", "ToPort" : "80",
+            "CidrIp" : "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+
+    "TestPilotP2PIAMRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument":{
+           "Statement":[
+              {
+                "Effect":"Allow",
+                "Principal":{ "Service":[ "ec2.amazonaws.com" ] },
+                "Action":[ "sts:AssumeRole" ]
+              }
+           ]
+        },
+        "Path": "/testpilot/",
+        "Policies": [
+          {
+            "PolicyName":"DeployIAMRequirements",
+            "PolicyDocument":{
+             "Version":"2012-10-17",
+             "Statement":[
+               { "Effect":"Allow", "Action": [ "ec2:DescribeTags" ], "Resource": "*" }
+             ]
+            }
+          }
+        ]
+      }
+    },
+
+    "TestPilotP2PInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/testpilot/",
+        "Roles": [{ "Ref": "TestPilotP2PIAMRole" }]
+      }
+    },
+
+    "TestPilotP2PEc2Instance" : {
+      "Type" : "AWS::EC2::Instance",
+      "Properties" : {
+        "ImageId" : { "Fn::FindInMap" : [ "RegionMap", { "Ref" : "AWS::Region" }, "AMI" ]},
+        "KeyName" : { "Ref" : "KeyName" },
+        "IamInstanceProfile": { "Ref": "TestPilotP2PInstanceProfile" },
+        "InstanceType" : { "Ref": "EC2InstanceType" },
+        "SecurityGroups" : [{ "Ref" : "TestPilotP2PSecurityGroup" }],
+        "UserData": { "Fn::Base64": { "Fn::Join": ["",
+          [
+            "#!/bin/bash -ex",
+            "\n", "echo Defaults:ec2-user \\!requiretty >> /etc/sudoers;",
+            "\n", "time yum -y --security update",
+            "\n", "time yum -y erase sendmail",
+            "\n", "time yum -y install cronie docker emacs-nox gcc-c++ git htop libffi-devel lsof memcached mysql nginx ntp openssl-devel postfix rsyslog strace tmux",
+            "\n", "time yum -y --enablerepo=epel install moreutils",
+            "\n", "time pip install --install-option='--install-scripts=/usr/bin' -U ansible docker-py",
+            "\n", "mkdir -p /data",
+            "\n"
+          ]
+        ]}},
+        "BlockDeviceMappings" : [
+          {
+            "DeviceName" : "/dev/xvda",
+            "Ebs" : {
+              "VolumeSize" : { "Ref": "EC2VolumeSize" },
+              "VolumeType" : "gp2"
+            }
+          }
+        ]
+      }
+    },
+
+    "TestPilotP2PELB":{
+      "Type":"AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties":{
+        "AvailabilityZones" : { "Fn::GetAZs" : "" },
+        "ConnectionDrainingPolicy":{ "Enabled" : true, "Timeout" : 15 },
+        "Listeners":[
+          {
+            "InstancePort":"1443",
+            "LoadBalancerPort":"443",
+            "Protocol":"HTTPS",
+            "SSLCertificateId":{
+               "Ref" : "SSLCertificateArn"
+            }
+          },
+          {
+            "InstancePort":"80",
+            "LoadBalancerPort":"80",
+            "Protocol":"HTTP"
+          }
+        ],
+        "Instances": [{ "Ref" : "TestPilotP2PEc2Instance" }],
+        "SecurityGroups": [{ "Fn::GetAtt" : [ "TestPilotP2PELBSecurityGroup", "GroupId" ] }]
+      }
+    },
+
+    "TestPilotP2PDNS": {
+      "Type": "AWS::Route53::RecordSetGroup",
+      "Properties": {
+        "HostedZoneName" : { "Fn::Join" : [ "", [{"Ref" : "HostedZone"}, "." ]]},
+        "RecordSets": [
+          {
+            "Name" : { "Fn::Join" : [ "", [{"Ref" : "Subdomain"}, ".", {"Ref" : "HostedZone"}, "."]]},
+            "Type" : "A",
+            "AliasTarget" : {
+              "HostedZoneId" : { "Fn::GetAtt":[ "TestPilotP2PELB", "CanonicalHostedZoneNameID" ] },
+              "DNSName" : { "Fn::GetAtt":[ "TestPilotP2PELB", "CanonicalHostedZoneName" ] }
+            }
+          },
+          {
+            "Name" : { "Fn::Join" : [ "", ["meta-", {"Ref" : "Subdomain"}, ".", {"Ref" : "HostedZone"}, "."]]},
+            "Type": "A",
+            "TTL": "30",
+            "ResourceRecords" : [ { "Fn::GetAtt" : [ "TestPilotP2PEc2Instance", "PublicIp" ] } ]
+          }
+        ]
+      }
+    }
+  },
+
+  "Outputs" : {
+    "Instance" : {
+      "Value" : { "Fn::GetAtt" : [ "TestPilotP2PEc2Instance", "PublicDnsName" ] },
+      "Description" : "DNS Name of the newly created EC2 instance"
+    },
+    "ELB": {
+      "Description": "The ELB",
+      "Value": { "Fn::GetAtt":[ "TestPilotP2PELB", "CanonicalHostedZoneName" ] }
+    }
+  }
+}
