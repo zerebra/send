@@ -68,6 +68,62 @@
 
   "Resources" : {
 
+    "TestPilotP2PS3Bucket": {
+        "Type": "AWS::S3::Bucket",
+        "Properties": {
+            "LifecycleConfiguration": {
+                "Rules": [
+                    {
+                        "Id": "ExpireRule",
+                        "Status": "Enabled",
+                        "ExpirationInDays": "3"
+                    }
+                ]
+            }
+        }
+    },
+
+    "TestPilotP2PIAMRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument":{
+           "Statement":[
+              {
+                "Effect":"Allow",
+                "Principal":{ "Service":[ "ec2.amazonaws.com" ] },
+                "Action":[ "sts:AssumeRole" ]
+              }
+           ]
+        },
+        "Path": "/testpilot/",
+        "Policies": [
+          {
+            "PolicyName":"TestPilotP2PIAMRequirements",
+            "PolicyDocument":{
+             "Version":"2012-10-17",
+             "Statement":[
+               {
+                  "Effect":"Allow",
+                  "Action":[ "S3:GetObject", "S3:PutObject", "S3:DeleteObject" ],
+                  "Resource":[
+                    {"Fn::Join": ["", [{ "Fn::GetAtt": ["TestPilotP2PS3Bucket", "Arn"] }, "/*"]]}
+                  ]
+               }
+             ]
+            }
+          }
+        ]
+      }
+    },
+
+    "TestPilotP2PInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/testpilot/",
+        "Roles": [{ "Ref": "TestPilotP2PIAMRole" }]
+      }
+    },
+
     "TestPilotP2PSecurityGroup" : {
       "Type" : "AWS::EC2::SecurityGroup",
       "Properties" : {
@@ -92,6 +148,29 @@
       }
     },
 
+    "TestPilotP2PRedisClusterSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Test Pilot P2P Elasticache Group",
+        "SecurityGroupIngress": [ {
+          "IpProtocol": "tcp",
+          "FromPort": "6379",
+          "ToPort": "6379",
+          "SourceSecurityGroupName": {"Ref": "TestPilotP2PSecurityGroup"}
+        } ]
+      }
+    },
+
+    "TestPilotP2PRedis": {
+      "Type": "AWS::ElastiCache::CacheCluster",
+      "Properties": {
+        "CacheNodeType": "cache.t2.micro",
+        "Engine": "redis",
+        "NumCacheNodes": "1",
+        "VpcSecurityGroupIds": [{"Fn::GetAtt": ["TestPilotP2PRedisClusterSecurityGroup", "GroupId"]}]
+      }
+    },
+
     "TestPilotP2PELBSecurityGroup" : {
       "Type" : "AWS::EC2::SecurityGroup",
       "Properties" : {
@@ -111,41 +190,6 @@
       }
     },
 
-    "TestPilotP2PIAMRole": {
-      "Type": "AWS::IAM::Role",
-      "Properties": {
-        "AssumeRolePolicyDocument":{
-           "Statement":[
-              {
-                "Effect":"Allow",
-                "Principal":{ "Service":[ "ec2.amazonaws.com" ] },
-                "Action":[ "sts:AssumeRole" ]
-              }
-           ]
-        },
-        "Path": "/testpilot/",
-        "Policies": [
-          {
-            "PolicyName":"DeployIAMRequirements",
-            "PolicyDocument":{
-             "Version":"2012-10-17",
-             "Statement":[
-               { "Effect":"Allow", "Action": [ "ec2:DescribeTags" ], "Resource": "*" }
-             ]
-            }
-          }
-        ]
-      }
-    },
-
-    "TestPilotP2PInstanceProfile": {
-      "Type": "AWS::IAM::InstanceProfile",
-      "Properties": {
-        "Path": "/testpilot/",
-        "Roles": [{ "Ref": "TestPilotP2PIAMRole" }]
-      }
-    },
-
     "TestPilotP2PEc2Instance" : {
       "Type" : "AWS::EC2::Instance",
       "Properties" : {
@@ -160,10 +204,11 @@
             "\n", "echo Defaults:ec2-user \\!requiretty >> /etc/sudoers;",
             "\n", "time yum -y --security update",
             "\n", "time yum -y erase sendmail",
-            "\n", "time yum -y install cronie docker emacs-nox gcc-c++ git htop libffi-devel lsof memcached mysql nginx ntp openssl-devel postfix rsyslog strace tmux",
+            "\n", "time yum -y install gcc-c++ git htop libffi-devel lsof nginx ntp openssl-devel rsyslog strace tmux",
             "\n", "time yum -y --enablerepo=epel install moreutils",
-            "\n", "time pip install --install-option='--install-scripts=/usr/bin' -U ansible docker-py",
+            "\n", "time pip install --install-option='--install-scripts=/usr/bin' -U ansible",
             "\n", "mkdir -p /data",
+            "\n", "chown ec2-user:ec2-user /data",
             "\n"
           ]
         ]}},
@@ -184,6 +229,13 @@
       "Properties":{
         "AvailabilityZones" : { "Fn::GetAZs" : "" },
         "ConnectionDrainingPolicy":{ "Enabled" : true, "Timeout" : 15 },
+        "HealthCheck":{
+          "Target":"TCP:1443",
+          "HealthyThreshold": "2",
+          "UnhealthyThreshold": "2",
+          "Interval": "15",
+          "Timeout": "3"
+        },
         "Listeners":[
           {
             "InstancePort":"1443",
@@ -236,6 +288,18 @@
     "ELB": {
       "Description": "The ELB",
       "Value": { "Fn::GetAtt":[ "TestPilotP2PELB", "CanonicalHostedZoneName" ] }
+    },
+    "BucketName": {
+      "Value": { "Ref": "TestPilotP2PS3Bucket" },
+      "Description": "The S3 Bucket Name"
+    },
+    "RedisAddress": {
+      "Value": {"Fn::GetAtt":["TestPilotP2PRedis", "RedisEndpoint.Address"]},
+      "Description": "Redis Endpoint Address"
+    },
+    "RedisPort": {
+      "Value": {"Fn::GetAtt":["TestPilotP2PRedis", "RedisEndpoint.Port"]},
+      "Description": "Redis Endpoint Port"
     }
   }
 }
